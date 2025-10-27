@@ -47,4 +47,4 @@ def index():
 
 if __name__ == '__main__':
 	# Run the app on localhost:5000 so it's easy to test locally.
-	app.run(host='127.0.0.1', port=5000)
+	app.run(port=5000, debug=True)
