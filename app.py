@@ -1,50 +1,50 @@
-from flask import Flask, jsonify, request, render_template
-from azure.storage.blob import BlobServiceClient, ContentSettings
-# Load environment variables from .env
-from dotenv import load_dotenv
+# minimal_app.py
+from flask import Flask, request, jsonify, render_template
 import os
-load_dotenv()
+from azure.storage.blob import BlobServiceClient, ContentSettings, PublicAccess
+from datetime import datetime
 
+
+# --- super simple config (edit these two lines) ---
+CONNECTION_STRING = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
+CONTAINER_NAME = os.environ.get("IMAGES_CONTAINER", "images-demo")
+
+# --- blob client & container (public-read) ---
+bsc = BlobServiceClient.from_connection_string(CONNECTION_STRING)
+cc  = bsc.get_container_client(CONTAINER_NAME)
+
+# --- flask app ---
 app = Flask(__name__)
-
-AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-IMAGES_CONTAINER = "images-demo"
-bsc = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
-
-@app.route('/api/v1/health', methods=['GET'])
-def health():
-	"""Simple health endpoint returning HTTP 200 and a small JSON payload."""
-	return jsonify(status='ok'), 200
-
-@app.route('/api/v1/gallery', methods=['GET'])
-def gallery():
-    """Endpoint to retrieve list of uploaded images."""
-    container_client = bsc.get_container_client(IMAGES_CONTAINER)
-    blob_list = container_client.list_blobs()
-    image_urls = [f"https://{bsc.account_name}.blob.core.windows.net/{IMAGES_CONTAINER}/{blob.name}" for blob in blob_list]
-    print(image_urls)
-    return jsonify(ok=True,gallery=image_urls), 200
-
-@app.route('/api/v1/upload', methods=['POST'])
-def upload():
-    f = request.files["file"]
-    filename = f.filename
-    print(filename)
-    try:
-    
-        img_bc = bsc.get_blob_client(IMAGES_CONTAINER, filename)
-        img_bc.upload_blob(f, overwrite=True, content_settings=ContentSettings(content_type="image/jpeg"))
-        image_url = f"https://{bsc.account_name}.blob.core.windows.net/{IMAGES_CONTAINER}/{filename}"
-    except Exception as e:
-        return jsonify(ok=False, error=str(e)), 500
-    """Endpoint to handle file uploads."""
-    # Implementation for file upload goes here
-    return jsonify(ok=True, url=image_url), 200
 
 @app.get("/")
 def index():
     return render_template("index.html")
 
-if __name__ == '__main__':
-	# Run the app on localhost:5000 so it's easy to test locally.
-	app.run(port=5000, debug=True)
+# Upload: multipart/form-data with field 'file'
+@app.post("/api/v1/upload")
+def upload():
+    f = request.files.get("file")
+    filename = f.filename 
+    print(filename)
+    try: 
+        img_blob = f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}-{filename}"
+        img_bc = bsc.get_blob_client(CONTAINER_NAME, img_blob)
+        img_bc.upload_blob(f.stream, overwrite=True, content_settings=ContentSettings(content_type="image/jpeg"))
+    except Exception as e:
+        print(e)
+        return jsonify(ok=False, error=str(e)), 500
+    return jsonify(ok=True, url=f"{cc.url}/{f.filename}")
+
+# Gallery: return list of public URLs (works because container is public-read)
+@app.get("/api/v1/gallery")
+def gallery():
+    urls = [f"{cc.url}/{b.name}" for b in cc.list_blobs()]
+    return jsonify(ok=True, gallery=urls)
+
+# Health: simple 200 if container client is reachable
+@app.get("/api/v1/health")
+def health():
+    return jsonify(ok=True, container=cc.container_name)
+
+if __name__ == "__main__":
+    app.run(port=5000, debug=True)
